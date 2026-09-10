@@ -1,0 +1,26 @@
+[project]
+name = "waiverwire"
+version = "0.1.0"
+description = "Rank fantasy-football waiver-wire targets from Sleeper leagues using nflverse data."
+requires-python = ">=3.11"
+dependencies = [
+    "nflreadpy>=0.1.5",
+    "polars>=1.44",
+    "requests>=2.32",
+    "python-dotenv>=1.0",
+    "fastapi>=0.115",
+    "uvicorn>=0.32",
+    "google-genai>=1.0",
+]
+
+[project.scripts]
+# Console entry points — installed onto PATH by `pip install -e .`
+waiver-rank = "waiverwire.waiver:main"
+waiver-leagues = "waiverwire.sleeper:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["waiverwire"]
