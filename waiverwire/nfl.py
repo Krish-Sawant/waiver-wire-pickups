@@ -74,6 +74,18 @@ def latest_rankable_season(min_weeks: int = 4) -> int:
         return season - 1
     return season
 
+
+def rankable_seasons() -> list[int]:
+    """The seasons to load for ranking: the latest published season plus the one
+    before it.
+
+    Loading both lets the "last N games played" window span the season boundary —
+    the current season's games take priority as they arrive, and last season fills
+    the rest early on (when only a game or two of the new season exists).
+    """
+    latest = latest_available_season()
+    return [latest - 1, latest]
+
 # Columns from load_player_stats that actually matter for fantasy/waiver ranking.
 # (The raw table has ~150 columns, most of them defense/kicking/punting noise.)
 _STAT_COLS = [
@@ -221,24 +233,31 @@ def get_expected_points(seasons: list[int]) -> pl.DataFrame:
             "points_gap": pl.Float64,
         }
     )
-    try:
-        o = nfl.load_ff_opportunity(seasons).rename({"player_id": "gsis_id"})
-    except Exception:
-        return empty
-    o = o.select(
-        [
-            "gsis_id",
-            # ffopportunity ships season as str and week as float; align with
-            # the integer keys used everywhere else so joins don't break.
-            pl.col("season").cast(pl.Int32),
-            pl.col("week").cast(pl.Int32),
-            pl.col("total_fantasy_points").alias("actual_points"),
-            pl.col("total_fantasy_points_exp").alias("expected_points"),
-        ]
-    )
-    return o.with_columns(
-        (pl.col("expected_points") - pl.col("actual_points")).alias("points_gap")
-    )
+    # Load per-season and skip any that 404 (e.g. the current season before
+    # ffopportunity has published it), so one missing season doesn't drop the
+    # others.
+    frames = []
+    for season in seasons:
+        try:
+            o = nfl.load_ff_opportunity([season]).rename({"player_id": "gsis_id"})
+        except Exception:
+            continue
+        frames.append(
+            o.select(
+                [
+                    "gsis_id",
+                    # ffopportunity ships season as str and week as float; align
+                    # with the integer keys used everywhere else.
+                    pl.col("season").cast(pl.Int32),
+                    pl.col("week").cast(pl.Int32),
+                    pl.col("total_fantasy_points").alias("actual_points"),
+                    pl.col("total_fantasy_points_exp").alias("expected_points"),
+                ]
+            ).with_columns(
+                (pl.col("expected_points") - pl.col("actual_points")).alias("points_gap")
+            )
+        )
+    return pl.concat(frames) if frames else empty
 
 
 def get_defense_ranks(seasons: list[int]) -> pl.DataFrame:

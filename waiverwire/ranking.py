@@ -47,21 +47,29 @@ def _pct_rank(col: str) -> pl.Expr:
 
 def opportunity_score(
     seasons: list[int],
-    as_of_week: int,
-    lookback: int = 3,
-    min_games: int = 2,
+    as_of_week: int | None = None,
+    as_of_season: int | None = None,
+    window_games: int = 4,
+    min_games: int = 1,
     features: pl.DataFrame | None = None,
 ) -> pl.DataFrame:
-    """Rank players by trailing-window opportunity as of a given week.
+    """Rank players by recent opportunity — their most recent games played.
+
+    The window is each player's most recent `window_games` games actually played,
+    ordered by (season, week). It spans the season boundary automatically: this
+    season's games take priority as they arrive, and last season's tail fills the
+    rest early on. Byes and missed games don't shrink the sample. Backtesting on
+    2025 showed a 4-game window predicts future scoring better than 3.
 
     Args:
-        seasons: seasons to pull. The score is computed on the LAST season in
-            the list (earlier ones only matter if a window straddles a boundary,
-            which by default it won't).
-        as_of_week: the week you're setting a lineup for; the window is the
-            `lookback` weeks ending at `as_of_week`.
-        lookback: number of trailing weeks to average over.
-        min_games: drop players with fewer than this many games in the window.
+        seasons: seasons present in `features`.
+        as_of_week: if given, exclude games after this week (of `as_of_season`) —
+            used for backtesting a point in time. If None, use all games played.
+        as_of_season: the season `as_of_week` refers to (defaults to the latest).
+        window_games: how many of each player's most recent games to average.
+        min_games: drop players with fewer than this many games. Defaults to 1 so
+            just-emerged breakout players (one big game) still surface — the games
+            count is exposed so tiny samples can be judged accordingly.
         features: optional precomputed frame from `build_player_week_features`
             (pass it to avoid recomputing when calling this repeatedly).
 
@@ -72,14 +80,19 @@ def opportunity_score(
     if features is None:
         features = build_player_week_features(seasons, include_redzone=False)
 
-    season = max(seasons)
-    lo = as_of_week - lookback + 1
+    # Order every game by (season, week) so the most recent — this season first,
+    # then last season's tail — sort ahead. `_ord` is a single sortable key.
+    pool = features.filter(
+        (pl.col("week") <= 18) & (pl.col("position").is_in(SKILL_POSITIONS))
+    ).with_columns((pl.col("season") * 100 + pl.col("week")).alias("_ord"))
 
-    window = features.filter(
-        (pl.col("season") == season)
-        & (pl.col("week") >= lo)
-        & (pl.col("week") <= as_of_week)
-        & (pl.col("position").is_in(SKILL_POSITIONS))
+    if as_of_week is not None:
+        season = as_of_season if as_of_season is not None else max(seasons)
+        pool = pool.filter(pl.col("_ord") <= season * 100 + as_of_week)
+
+    # Keep each player's most recent `window_games` games played.
+    window = pool.filter(
+        pl.col("_ord").rank("ordinal", descending=True).over("gsis_id") <= window_games
     )
 
     # Average usage across the games each player actually played in the window.
