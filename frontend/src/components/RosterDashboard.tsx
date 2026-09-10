@@ -8,6 +8,7 @@ import {
   type WaiverBoard,
 } from "../api";
 import PlayerCard from "./PlayerCard";
+import WaiverChat from "./WaiverChat";
 
 function RosterTable({
   players,
@@ -47,34 +48,40 @@ function WaiverBoardView({
 
   return (
     <>
-      <p className="record">
-        Best available · {board.season} season, through week {board.week} · click a
-        player for full details
-      </p>
-      <table className="roster waiver-table">
-        <thead>
-          <tr>
-            <th className="rank">#</th>
-            <th className="pos">Pos</th>
-            <th>Player</th>
-            <th className="num">Fantasy Pts/gm</th>
-          </tr>
-        </thead>
-        <tbody>
-          {board.players.map((p, i) => (
-            <tr
-              key={p.gsis_id}
-              className="waiver-row"
-              onClick={() => setSelected(p.gsis_id)}
-            >
-              <td className="rank">{i + 1}</td>
-              <td className="pos">{p.position ?? "—"}</td>
-              <td>{p.name}</td>
-              <td className="num">{p.ppr_pg ?? "—"}</td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
+      <div className="waiver-layout">
+        <div className="waiver-main">
+          <p className="record">
+            Best available · {board.season} season, through week {board.week} · click
+            a player for full details
+          </p>
+          <table className="roster waiver-table">
+            <thead>
+              <tr>
+                <th className="rank">#</th>
+                <th className="pos">Pos</th>
+                <th>Player</th>
+                <th className="num">Fantasy Pts/gm</th>
+              </tr>
+            </thead>
+            <tbody>
+              {board.players.map((p, i) => (
+                <tr
+                  key={p.gsis_id}
+                  className="waiver-row"
+                  onClick={() => setSelected(p.gsis_id)}
+                >
+                  <td className="rank">{i + 1}</td>
+                  <td className="pos">{p.position ?? "—"}</td>
+                  <td>{p.name}</td>
+                  <td className="num">{p.ppr_pg ?? "—"}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+
+        <WaiverChat leagueId={leagueId} />
+      </div>
 
       {selected && (
         <PlayerCard

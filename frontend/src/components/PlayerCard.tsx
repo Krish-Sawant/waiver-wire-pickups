@@ -89,12 +89,14 @@ export default function PlayerCard({ gsisId, leagueId, onClose }: Props) {
   const [outlook, setOutlook] = useState<string | null>(null);
   const [outlookLoading, setOutlookLoading] = useState(false);
   const [outlookError, setOutlookError] = useState<string | null>(null);
+  const [season, setSeason] = useState<number | null>(null);
 
   useEffect(() => {
     setDetail(null);
     setError(null);
     setOutlook(null);
     setOutlookError(null);
+    setSeason(null);
     getPlayer(gsisId)
       .then(setDetail)
       .catch((e: Error) => setError(e.message));
@@ -110,6 +112,18 @@ export default function PlayerCard({ gsisId, leagueId, onClose }: Props) {
   }
 
   const cols = detail ? columnsFor(detail.position) : [];
+
+  // Seasons present in the log, newest first; default the tab to the newest.
+  const seasons = detail
+    ? [...new Set(detail.game_log.map((r) => r.season))].sort((a, b) => b - a)
+    : [];
+  const activeSeason = season ?? seasons[0] ?? null;
+  const seasonRows =
+    detail && activeSeason != null
+      ? detail.game_log
+          .filter((r) => r.season === activeSeason)
+          .sort((a, b) => a.week - b.week)
+      : [];
 
   return (
     <div className="modal-overlay" onClick={onClose}>
@@ -160,36 +174,53 @@ export default function PlayerCard({ gsisId, leagueId, onClose }: Props) {
               <Metric label="Pts vs Exp" value={detail.metrics.gap_pg ?? "—"} />
             </div>
 
-            <h3>Game log — {detail.season}</h3>
+            <div className="gamelog-head">
+              <h3>Game log</h3>
+              <div className="season-tabs">
+                {seasons.map((s) => (
+                  <button
+                    key={s}
+                    className={`season-tab ${s === activeSeason ? "active" : ""}`}
+                    onClick={() => setSeason(s)}
+                  >
+                    {s}
+                  </button>
+                ))}
+              </div>
+            </div>
             <div className="log-scroll">
-              <table className="gamelog">
-                <thead>
-                  <tr>
-                    {cols.map((c) => (
-                      <th
-                        key={c.key}
-                        className={c.key === "opponent" ? "" : "num"}
-                      >
-                        {c.label}
-                      </th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {detail.game_log.map((row) => (
-                    <tr key={row.week}>
+              {seasonRows.length === 0 ? (
+                <p className="empty">No games this season.</p>
+              ) : (
+                <table className="gamelog">
+                  <thead>
+                    <tr>
                       {cols.map((c) => (
-                        <td
+                        <th
                           key={c.key}
                           className={c.key === "opponent" ? "" : "num"}
                         >
-                          {cell(row[c.key])}
-                        </td>
+                          {c.label}
+                        </th>
                       ))}
                     </tr>
-                  ))}
-                </tbody>
-              </table>
+                  </thead>
+                  <tbody>
+                    {seasonRows.map((row) => (
+                      <tr key={row.week}>
+                        {cols.map((c) => (
+                          <td
+                            key={c.key}
+                            className={c.key === "opponent" ? "" : "num"}
+                          >
+                            {cell(row[c.key])}
+                          </td>
+                        ))}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
             </div>
 
             <h3>Fantasy Outlook</h3>

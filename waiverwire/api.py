@@ -21,10 +21,11 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from google import genai
 from google.genai import types
+from pydantic import BaseModel
 
 from waiverwire.nfl import (
     build_player_week_features,
-    latest_rankable_season,
+    rankable_seasons,
     sleeper_gsis_crosswalk,
 )
 from waiverwire.ranking import opportunity_score
@@ -42,7 +43,7 @@ app = FastAPI(title="Waiver Wire API")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
-    allow_methods=["GET"],
+    allow_methods=["GET", "POST"],
     allow_headers=["*"],
 )
 
@@ -52,6 +53,17 @@ def _num(value, ndigits: int = 1):
     if isinstance(value, float):
         return None if math.isnan(value) else round(value, ndigits)
     return value
+
+
+def _player_metrics(ranked: pl.DataFrame, gid: str | None) -> dict | None:
+    """Recent PPR/gm and role score for a player, or None if not in the ranking."""
+    if not gid:
+        return None
+    row = ranked.filter(pl.col("gsis_id") == gid)
+    if row.is_empty():
+        return None
+    m = row.to_dicts()[0]
+    return {"ppr_pg": _num(m["ppr_pg"], 1), "role": _num(m["opportunity_score"], 2)}
 
 
 @app.get("/api/leagues")
@@ -103,10 +115,14 @@ _ranking_cache: dict = {"df": None, "feats": None, "season": None, "week": None,
 def _base_ranking() -> dict:
     now = time.time()
     if _ranking_cache["df"] is None or now - _ranking_cache["ts"] > 21_600:
-        season = latest_rankable_season()
-        feats = build_player_week_features([season], include_redzone=False)
-        week = int(feats.filter(pl.col("week") <= 18)["week"].max())
-        ranked = opportunity_score([season], as_of_week=week, features=feats)
+        seasons = rankable_seasons()  # e.g. [2025, 2026]
+        feats = build_player_week_features(seasons, include_redzone=False)
+        # Report the latest (season, week) present, for the UI label. The window
+        # itself spans the boundary via each player's last games played.
+        reg = feats.filter(pl.col("week") <= 18)
+        season = int(reg["season"].max())
+        week = int(reg.filter(pl.col("season") == season)["week"].max())
+        ranked = opportunity_score(seasons, features=feats)  # all games played
         _ranking_cache.update(df=ranked, feats=feats, season=season, week=week, ts=now)
     return _ranking_cache
 
@@ -131,6 +147,7 @@ def waiver(league_id: str, top: int = 25) -> dict:
             pl.col("player_display_name").alias("name"),
             "position",
             pl.col("ppr_pg").round(1),
+            "games",
         ]
     )
 
@@ -141,6 +158,7 @@ def waiver(league_id: str, top: int = 25) -> dict:
 # Box-score fields we surface in the game log; the front end picks which to show
 # per position.
 _LOG_COLS = [
+    "season",
     "week",
     "opponent_team",
     "fantasy_points_ppr",
@@ -168,13 +186,16 @@ def player_detail(gsis_id: str) -> dict:
 
     weeks = feats.filter(
         (pl.col("gsis_id") == gsis_id) & (pl.col("week") <= 18)
-    ).sort("week")
+    ).sort(["season", "week"])
     if weeks.is_empty():
         raise HTTPException(404, "No data for that player")
 
     latest = weeks.tail(1).to_dicts()[0]
 
-    log = weeks.select([c for c in _LOG_COLS if c in weeks.columns])
+    # Game log newest-first (this season's games on top, then last season's).
+    log = weeks.sort(["season", "week"], descending=True).select(
+        [c for c in _LOG_COLS if c in weeks.columns]
+    )
     game_log = [
         {("opponent" if k == "opponent_team" else k): _num(v) for k, v in row.items()}
         for row in log.to_dicts()
@@ -199,7 +220,7 @@ def player_detail(gsis_id: str) -> dict:
         # Fall back to their recent form from their last few games so the tiles
         # still populate. Recent Role is a ranking percentile, so it's undefined
         # here.
-        recent = weeks.tail(3)
+        recent = weeks.tail(4)
         volume = recent.select(
             (pl.col("targets").fill_null(0) + pl.col("carries").fill_null(0)).alias("v")
         )["v"].mean()
@@ -310,7 +331,8 @@ def outlook(league_id: str, gsis_id: str) -> dict:
             contents=user_msg,
             config=types.GenerateContentConfig(
                 system_instruction=_OUTLOOK_SYSTEM,
-                max_output_tokens=1024,
+                # Headroom for the thinking model's reasoning (a cap, not a charge).
+                max_output_tokens=4096,
             ),
         )
     except Exception as exc:  # google-genai raises provider-specific errors
@@ -318,3 +340,102 @@ def outlook(league_id: str, gsis_id: str) -> dict:
 
     text = (response.text or "").strip()
     return {"text": text}
+
+
+_CHAT_SYSTEM = (
+    "You are a fantasy football waiver-wire assistant for a PPR league, embedded "
+    "in a web app. You are given the user's current roster and the top available "
+    "(unrostered) players, each with recent PPR points-per-game and a 'role' score "
+    "(0-1 percentile of recent snap share, volume, and target share). On the first "
+    "message, give a short, skimmable waiver report: the best available pickups "
+    "grouped by position (QB, RB, WR, TE), and for the 2-3 best targets, which "
+    "rostered player they could drop to add them — prefer the weakest player at a "
+    "position of surplus depth, and never drop a clearly superior starter. Use "
+    "short lines or bullets. For follow-up questions, answer conversationally and "
+    "specifically. Ground every claim in the numbers provided; never invent stats "
+    "or players not listed. Respond in plain text — do not use Markdown symbols "
+    "like #, *, or **; you may use a leading dash for list items."
+)
+
+
+class ChatMessage(BaseModel):
+    role: str  # "user" or "assistant"
+    text: str
+
+
+class ChatRequest(BaseModel):
+    messages: list[ChatMessage]
+
+
+@app.post("/api/leagues/{league_id}/chat")
+def chat(league_id: str, req: ChatRequest) -> dict:
+    """Conversational waiver assistant grounded in the roster + available players."""
+    if not USERNAME:
+        raise HTTPException(500, "sleeper_username is not set in .env")
+    if not GEMINI_API_KEY:
+        raise HTTPException(
+            503,
+            "Waiver Assistant needs a Gemini API key — add GEMINI_API_KEY to .env "
+            "and restart the server.",
+        )
+    if not req.messages:
+        raise HTTPException(400, "messages must not be empty")
+
+    roster = get_user_roster(league_id, USERNAME)
+    if roster is None:
+        raise HTTPException(404, "No roster for this user in that league")
+    mapping = _sleeper_to_gsis()
+    for player in (*roster["starters"], *roster["bench"]):
+        player["gsis_id"] = mapping.get(player["player_id"])
+
+    base = _base_ranking()
+    ranked = base["df"]
+
+    roster_lines = []
+    for label, group in (("STARTER", roster["starters"]), ("BENCH", roster["bench"])):
+        for p in group:
+            m = _player_metrics(ranked, p["gsis_id"])
+            stat = f"{m['ppr_pg']} PPR/gm, role {m['role']}" if m else "no recent data"
+            roster_lines.append(f"- [{label}] {p['name']} ({p['position']}, {p['team']}): {stat}")
+
+    taken = rostered_gsis_ids(league_id)
+    available = ranked.filter(~pl.col("gsis_id").is_in(taken)) if taken else ranked
+    waiver_lines = [
+        f"- {row['player_display_name']} ({row['position']}): "
+        f"{_num(row['ppr_pg'], 1)} PPR/gm, role {_num(row['opportunity_score'], 2)}"
+        for row in available.head(20).to_dicts()
+    ]
+
+    system = (
+        _CHAT_SYSTEM
+        + f"\n\nScoring: PPR. Data is from the {base['season']} season through "
+        f"week {base['week']}.\n\n"
+        "TOP AVAILABLE PLAYERS (waiver wire):\n" + "\n".join(waiver_lines) + "\n\n"
+        "MY ROSTER:\n" + "\n".join(roster_lines)
+    )
+
+    contents = [
+        {
+            "role": "model" if m.role == "assistant" else "user",
+            "parts": [{"text": m.text}],
+        }
+        for m in req.messages
+    ]
+
+    try:
+        client = genai.Client(api_key=GEMINI_API_KEY)
+        response = client.models.generate_content(
+            model=GEMINI_MODEL,
+            contents=contents,
+            config=types.GenerateContentConfig(
+                system_instruction=system,
+                # 3.6-flash is a thinking model — reasoning eats into this budget,
+                # so give plenty of headroom or the visible reply gets truncated.
+                # (This is a ceiling, not a charge — you pay only for tokens used.)
+                max_output_tokens=4096,
+            ),
+        )
+    except Exception as exc:
+        raise HTTPException(502, f"Gemini request failed: {exc}")
+
+    return {"text": (response.text or "").strip()}

@@ -36,6 +36,7 @@ export interface WaiverPlayer {
   name: string;
   position: string | null;
   ppr_pg: number | null;
+  games: number | null;
 }
 
 export interface WaiverBoard {
@@ -55,6 +56,7 @@ export interface PlayerMetrics {
 }
 
 export interface GameLogRow {
+  season: number;
   week: number;
   opponent: string | null;
   fantasy_points_ppr: number | null;
@@ -83,8 +85,7 @@ export interface PlayerDetail {
   game_log: GameLogRow[];
 }
 
-async function getJSON<T>(path: string): Promise<T> {
-  const res = await fetch(`${BASE}${path}`);
+async function handle<T>(res: Response): Promise<T> {
   if (!res.ok) {
     let detail = `Request failed (${res.status})`;
     try {
@@ -95,6 +96,18 @@ async function getJSON<T>(path: string): Promise<T> {
     throw new Error(detail);
   }
   return res.json() as Promise<T>;
+}
+
+function getJSON<T>(path: string): Promise<T> {
+  return fetch(`${BASE}${path}`).then((r) => handle<T>(r));
+}
+
+function postJSON<T>(path: string, body: unknown): Promise<T> {
+  return fetch(`${BASE}${path}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  }).then((r) => handle<T>(r));
 }
 
 export function getLeagues(): Promise<League[]> {
@@ -119,4 +132,16 @@ export interface Outlook {
 
 export function getOutlook(leagueId: string, gsisId: string): Promise<Outlook> {
   return getJSON<Outlook>(`/leagues/${leagueId}/outlook/${gsisId}`);
+}
+
+export interface ChatTurn {
+  role: "user" | "assistant";
+  text: string;
+}
+
+export function postChat(
+  leagueId: string,
+  messages: ChatTurn[]
+): Promise<{ text: string }> {
+  return postJSON<{ text: string }>(`/leagues/${leagueId}/chat`, { messages });
 }
