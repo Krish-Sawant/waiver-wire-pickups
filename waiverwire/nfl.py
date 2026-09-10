@@ -55,11 +55,31 @@ def latest_available_season(probe_from: int | None = None) -> int:
     # will get a clear error from nflreadpy if it truly can't load anything.
     return start - 2
 
+
+def latest_rankable_season(min_weeks: int = 4) -> int:
+    """Newest season with enough games played to rank on.
+
+    `latest_available_season` flips to a new season as soon as its first week is
+    published, but one or two weeks is too small a sample to rank (with a 3-week
+    window and a 2-game minimum, everyone gets filtered out). Until the new
+    season has `min_weeks` of regular-season data, stay on the prior season.
+    """
+    season = latest_available_season()
+    try:
+        weeks = nfl.load_player_stats([season]).filter(pl.col("week") <= 18)["week"]
+        max_week = weeks.max() if weeks.len() else 0
+    except Exception:
+        max_week = 0
+    if max_week is None or max_week < min_weeks:
+        return season - 1
+    return season
+
 # Columns from load_player_stats that actually matter for fantasy/waiver ranking.
 # (The raw table has ~150 columns, most of them defense/kicking/punting noise.)
 _STAT_COLS = [
     "player_id",
     "player_display_name",
+    "headshot_url",
     "position",
     "position_group",
     "season",
@@ -186,8 +206,25 @@ def get_expected_points(seasons: list[int]) -> pl.DataFrame:
 
     Uses ffopportunity's default (non-PPR) scoring; `actual` and `expected` use
     the same scoring, so the gap is internally consistent.
+
+    ffopportunity lags the core stats — early in a season its file may not exist
+    yet. Since expected points only feed the (unweighted) gap metric, we degrade
+    to an empty frame rather than failing the whole feature build.
     """
-    o = nfl.load_ff_opportunity(seasons).rename({"player_id": "gsis_id"})
+    empty = pl.DataFrame(
+        schema={
+            "gsis_id": pl.Utf8,
+            "season": pl.Int32,
+            "week": pl.Int32,
+            "actual_points": pl.Float64,
+            "expected_points": pl.Float64,
+            "points_gap": pl.Float64,
+        }
+    )
+    try:
+        o = nfl.load_ff_opportunity(seasons).rename({"player_id": "gsis_id"})
+    except Exception:
+        return empty
     o = o.select(
         [
             "gsis_id",
