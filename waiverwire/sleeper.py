@@ -10,6 +10,7 @@ to JSON for an API/front end.
 from __future__ import annotations
 
 import os
+import time
 from datetime import date
 
 import requests
@@ -58,6 +59,63 @@ def _league_summary(lg: dict) -> dict:
         "sport": lg.get("sport"),
         "avatar": lg.get("avatar"),          # avatar id; UI can build the image URL
         "scoring": (lg.get("scoring_settings") or {}).get("rec"),  # ~1.0 PPR, 0.5 half, 0 standard
+    }
+
+
+# Sleeper's full NFL player map is ~5MB; fetch it once and cache in-memory for a
+# day so resolving rosters is instant and we don't ship it to the browser.
+_players_cache: dict = {"data": None, "ts": 0.0}
+
+
+def get_players() -> dict:
+    """Sleeper's player map: sleeper_id -> player info. Cached ~24h in-memory."""
+    now = time.time()
+    if _players_cache["data"] is None or now - _players_cache["ts"] > 86_400:
+        _players_cache["data"] = requests.get(f"{SLEEPER_BASE}/players/nfl").json()
+        _players_cache["ts"] = now
+    return _players_cache["data"]
+
+
+def _player_info(player_id: str, players: dict) -> dict:
+    """Resolve one Sleeper player id to display fields."""
+    p = players.get(str(player_id)) or {}
+    name = (
+        p.get("full_name")
+        or f"{p.get('first_name', '')} {p.get('last_name', '')}".strip()
+        or str(player_id)  # team defenses come through as the raw team code
+    )
+    return {
+        "player_id": str(player_id),
+        "name": name,
+        "position": p.get("position"),
+        "team": p.get("team"),
+    }
+
+
+def get_user_roster(league_id: str, username: str) -> dict | None:
+    """The named user's roster in a league, with player names resolved.
+
+    Returns starters and bench (each a list of player dicts) plus the team's
+    win/loss record, or None if the user has no roster in that league.
+    """
+    user_id = get_user_id(username)
+    rosters = requests.get(f"{SLEEPER_BASE}/league/{league_id}/rosters").json()
+    mine = next((r for r in rosters if r.get("owner_id") == user_id), None)
+    if mine is None:
+        return None
+
+    players = get_players()
+    starter_ids = [pid for pid in (mine.get("starters") or []) if pid and pid != "0"]
+    starter_set = set(starter_ids)
+    bench_ids = [pid for pid in (mine.get("players") or []) if pid not in starter_set]
+    settings = mine.get("settings") or {}
+
+    return {
+        "starters": [_player_info(pid, players) for pid in starter_ids],
+        "bench": [_player_info(pid, players) for pid in bench_ids],
+        "wins": settings.get("wins"),
+        "losses": settings.get("losses"),
+        "ties": settings.get("ties"),
     }
 
 
