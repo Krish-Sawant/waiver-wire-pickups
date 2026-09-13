@@ -75,6 +75,82 @@ def latest_rankable_season(min_weeks: int = 4) -> int:
     return season
 
 
+def active_roster_ids(season: int) -> set[str]:
+    """gsis_ids of players on an active NFL roster (status ACT) for a season.
+
+    Used to keep retired / cut / unsigned players off the waiver board even when
+    their prior-season stats still look good. Returns an empty set if the roster
+    file isn't available — callers should then skip the filter rather than drop
+    everyone.
+    """
+    try:
+        rosters = nfl.load_rosters([season])
+    except Exception:
+        return set()
+    if "status" in rosters.columns:
+        rosters = rosters.filter(pl.col("status") == "ACT")
+    return set(
+        rosters.filter(pl.col("gsis_id").is_not_null())["gsis_id"].to_list()
+    )
+
+
+def depth_positions(season: int) -> dict[str, dict]:
+    """gsis_id -> {'pos': 'RB', 'rank': 3} — the player's spot on the current
+    depth chart at their (best) fantasy position.
+
+    Lets the ranking avoid promoting a buried backup whose prior-season stats
+    still look good (e.g. an RB who started when the starter was hurt but is now
+    third string). Uses the latest live depth-chart snapshot.
+    """
+    try:
+        dc = nfl.load_depth_charts([season])
+    except Exception:
+        return {}
+    needed = {"dt", "gsis_id", "pos_abb", "pos_rank"}
+    if not needed.issubset(dc.columns):
+        return {}
+
+    latest = dc.filter(pl.col("dt") == dc["dt"].max())
+    fantasy = latest.filter(
+        pl.col("pos_abb").is_in(["QB", "RB", "WR", "TE"])
+        & pl.col("gsis_id").is_not_null()
+    )
+    # Best (lowest) rank per player across fantasy positions.
+    best = fantasy.sort("pos_rank").group_by("gsis_id").first()
+    return {
+        row["gsis_id"]: {"pos": row["pos_abb"], "rank": row["pos_rank"]}
+        for row in best.select(["gsis_id", "pos_abb", "pos_rank"]).to_dicts()
+    }
+
+
+def current_teams(season: int) -> dict[str, str]:
+    """gsis_id -> current NFL team for a season, from the roster file.
+
+    The game log shows the team a player suited up for *last game*, which is
+    stale after an offseason move (e.g. a player who left the 49ers for the
+    Vikings). The roster has their current team.
+    """
+    try:
+        rosters = nfl.load_rosters([season])
+    except Exception:
+        return {}
+    r = rosters.filter(
+        pl.col("gsis_id").is_not_null() & pl.col("team").is_not_null()
+    )
+    return dict(zip(r["gsis_id"].to_list(), r["team"].to_list()))
+
+
+def current_season() -> int:
+    """The current NFL season year — always the season rosters, depth charts, and
+    injury reports should come from.
+
+    The league year rolls over in March, so January/February still belong to the
+    prior season (e.g. the 2025 playoffs happen in early 2026).
+    """
+    today = date.today()
+    return today.year if today.month >= 3 else today.year - 1
+
+
 def rankable_seasons() -> list[int]:
     """The seasons to load for ranking: the latest published season plus the one
     before it.
@@ -175,6 +251,104 @@ def get_injuries(seasons: list[int]) -> pl.DataFrame:
             "practice_status",
         ]
     )
+
+
+def get_current_injuries(seasons: list[int], stale_weeks: int = 4) -> dict[str, str]:
+    """Each player's current availability flag: gsis_id -> status.
+
+    Two signals are combined so we don't recommend players who can't help:
+
+    1. Injury reports: the player's latest report (Out / Doubtful / Questionable),
+       but only if they haven't played since it — this captures a late-2025 IR
+       stint that persists into today.
+    2. Staleness ("Inactive"): a player whose most recent game is more than
+       `stale_weeks` football-weeks behind the current week. This catches
+       season-ending injuries that never appeared on an injury report — e.g. a
+       player who last played 2025 Week 4 and hasn't played since would otherwise
+       rank on year-old stats.
+
+    Injury-report status takes priority; staleness fills the gaps.
+    """
+    reg = 18  # regular-season length, for spanning the season boundary
+    latest_season = current_season()  # rosters + injury reports come from here
+
+    stats = (
+        nfl.load_player_stats(seasons)
+        .select(pl.col("player_id").alias("gsis_id"), "season", "week")
+        .with_columns((pl.col("season") * 100 + pl.col("week")).alias("ord"))
+    )
+    if stats.is_empty():
+        return {}
+
+    # The current point = the most recent (season, week) anyone has played.
+    cur = stats.sort("ord").tail(1).to_dicts()[0]
+    cur_season, cur_week = cur["season"], cur["week"]
+
+    # Each player's most recent game, and how many football-weeks ago it was.
+    last_game = stats.sort("ord").group_by("gsis_id").tail(1)
+    last_game = last_game.with_columns(
+        pl.when(pl.col("season") == cur_season)
+        .then(cur_week - pl.col("week"))
+        .otherwise(
+            (reg - pl.col("week"))
+            + cur_week
+            + (cur_season - pl.col("season") - 1) * reg
+        )
+        .alias("weeks_since")
+    )
+
+    # Current-season roster status — the source of truth for "is he healthy now".
+    roster_status: dict[str, str] = {}
+    try:
+        rosters = nfl.load_rosters([latest_season])
+        if "status" in rosters.columns:
+            roster_status = dict(
+                zip(rosters["gsis_id"].to_list(), rosters["status"].to_list())
+            )
+    except Exception:
+        pass
+    active = {gid for gid, s in roster_status.items() if s == "ACT"}
+
+    status: dict[str, str] = {}
+
+    # 1) CURRENT-season injury reports only (this week's Out/Doubtful/Questionable).
+    #    Older seasons' reports are stale — a 2025 "Out" says nothing about today.
+    inj = (
+        nfl.load_injuries([latest_season])
+        .select(
+            "gsis_id",
+            pl.col("season").cast(pl.Int32),
+            pl.col("week").cast(pl.Int32),
+            "report_status",
+        )
+        .filter(pl.col("report_status").is_not_null() & pl.col("gsis_id").is_not_null())
+        .with_columns((pl.col("season") * 100 + pl.col("week")).alias("ord"))
+    )
+    if not inj.is_empty():
+        latest = inj.sort("ord").group_by("gsis_id").tail(1)
+        last_ord = last_game.select("gsis_id", pl.col("ord").alias("last_ord"))
+        current = latest.join(last_ord, on="gsis_id", how="left").filter(
+            pl.col("last_ord").is_null() | (pl.col("ord") >= pl.col("last_ord"))
+        )
+        status.update(
+            zip(current["gsis_id"].to_list(), current["report_status"].to_list())
+        )
+
+    # 2) Reserve/IR roster designations -> Out (season-long injuries that may not
+    #    be on a weekly report).
+    for gid, rstatus in roster_status.items():
+        if gid not in status and rstatus in {"RES", "PUP", "NON", "IR"}:
+            status[gid] = "Out"
+
+    # 3) Staleness -> Inactive, but NEVER for an active-roster player. An ACT
+    #    player who was hurt in 2025 and has since recovered (e.g. hasn't logged a
+    #    2026 game yet) stays unflagged.
+    stale = last_game.filter(pl.col("weeks_since") > stale_weeks)
+    for gid in stale["gsis_id"].to_list():
+        if gid not in status and gid not in active:
+            status[gid] = "Inactive"
+
+    return status
 
 
 def get_redzone_touches(seasons: list[int]) -> pl.DataFrame:

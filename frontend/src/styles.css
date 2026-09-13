@@ -13,6 +13,100 @@ body {
 .topbar {
   background: #0d2c54;
   padding: 16px 24px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+/* Push the account + logout controls to the right of the title. */
+.topbar-account {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.sleeper-name {
+  color: rgba(255, 255, 255, 0.85);
+  font-size: 0.85rem;
+  font-weight: 600;
+}
+
+.linkbar-btn {
+  background: transparent;
+  border: 1px solid rgba(255, 255, 255, 0.4);
+  color: #ffffff;
+  border-radius: 8px;
+  padding: 6px 12px;
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+
+.linkbar-btn:hover {
+  background: rgba(255, 255, 255, 0.12);
+}
+
+.logout-btn {
+  background: transparent;
+  border: 1px solid rgba(255, 255, 255, 0.4);
+  color: #ffffff;
+  border-radius: 8px;
+  padding: 6px 12px;
+  font-size: 0.85rem;
+  cursor: pointer;
+  margin-left: auto; /* pin to the right when it's the only right-side control */
+}
+
+/* When the account block is present it already sits at the right, so the
+   adjacent logout button shouldn't add its own auto margin. */
+.topbar-account + .logout-btn {
+  margin-left: 0;
+}
+
+.logout-btn:hover {
+  background: rgba(255, 255, 255, 0.12);
+}
+
+/* Login */
+.login-card {
+  max-width: 340px;
+  margin: 60px auto;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 28px;
+  background: #ffffff;
+  border: 1px solid #e2e8f2;
+  border-radius: 12px;
+  box-shadow: 0 4px 14px rgba(13, 44, 84, 0.08);
+}
+
+.login-card h2 {
+  margin: 0 0 4px;
+  color: #0d2c54;
+}
+
+.login-card input {
+  padding: 10px 12px;
+  border: 1px solid #dbe1ea;
+  border-radius: 8px;
+  font-size: 0.95rem;
+}
+
+.login-hint {
+  margin: -6px 0 0;
+  font-size: 0.8rem;
+  color: #6b7688;
+}
+
+.login-switch {
+  background: none;
+  border: none;
+  color: #0d2c54;
+  font-size: 0.85rem;
+  cursor: pointer;
+  padding: 4px;
+  text-decoration: underline;
 }
 
 .topbar-title {
@@ -196,6 +290,28 @@ h3 {
 .gms-thin {
   color: #c77700;
   font-weight: 700;
+}
+
+/* Injury badge */
+.inj-badge {
+  display: inline-block;
+  margin-left: 8px;
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  vertical-align: middle;
+}
+
+.inj-out {
+  background: #fde3e3;
+  color: #b00020;
+}
+
+.inj-q {
+  background: #fff2d9;
+  color: #a4670a;
 }
 
 .waiver-row {
@@ -511,6 +627,136 @@ h3 {
 .gamelog th.num,
 .gamelog td.num {
   text-align: right;
+}
+
+.waiver-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.toolbar-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.star-col {
+  width: 32px;
+}
+
+.star-cell {
+  width: 32px;
+  text-align: center;
+  cursor: pointer;
+  color: #e0a500;
+  font-size: 1.05rem;
+  user-select: none;
+}
+
+.star-cell:hover {
+  color: #c77700;
+}
+
+.filter-bar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin: 8px 0 14px;
+}
+
+.player-search {
+  flex: 1;
+  min-width: 160px;
+  padding: 8px 12px;
+  border: 1px solid #dbe1ea;
+  border-radius: 8px;
+  font-size: 0.9rem;
+}
+
+.pos-filter {
+  display: flex;
+  gap: 6px;
+}
+
+.pos-tab {
+  background: #eef2f8;
+  color: #0d2c54;
+  border: 1px solid #dbe1ea;
+  border-radius: 999px;
+  padding: 6px 12px;
+  font-size: 0.82rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.pos-tab.active {
+  background: #0d2c54;
+  color: #ffffff;
+  border-color: #0d2c54;
+}
+
+/* Compare players modal */
+.compare-pickers {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin: 12px 0 4px;
+}
+
+.compare-pickers select {
+  flex: 1;
+  min-width: 160px;
+  padding: 8px 10px;
+  border: 1px solid #dbe1ea;
+  border-radius: 8px;
+  font-size: 0.9rem;
+  background: #fff;
+}
+
+.compare-vs {
+  color: #8a94a3;
+  font-weight: 600;
+}
+
+.compare-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 16px 0 8px;
+}
+
+.compare-table th {
+  text-align: center;
+  padding: 8px 10px;
+  border-bottom: 2px solid #0d2c54;
+  color: #0d2c54;
+  font-size: 0.9rem;
+}
+
+.compare-table th:first-child {
+  text-align: left;
+}
+
+.compare-table td {
+  padding: 8px 10px;
+  border-bottom: 1px solid #f0f0f0;
+  text-align: center;
+}
+
+.compare-table td.metric-name {
+  text-align: left;
+  color: #666;
+  font-size: 0.85rem;
+}
+
+.compare-table td.win {
+  background: #e7f5ec;
+  color: #1a7f3c;
+  font-weight: 700;
 }
 
 .outlook-text {

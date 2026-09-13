@@ -34,6 +34,10 @@ W_SHARE = 0.20   # WOPR — quality of his share of the passing game
 W_OPPORTUNITY = 1.0
 W_GAP = 0.0
 
+# Current-season games are weighted this many times a prior-season game within a
+# player's window, so recent (this-year) form takes priority over last year's.
+CURRENT_SEASON_WEIGHT = 2.0
+
 SKILL_POSITIONS = ["QB", "RB", "WR", "TE"]
 
 
@@ -95,17 +99,33 @@ def opportunity_score(
         pl.col("_ord").rank("ordinal", descending=True).over("gsis_id") <= window_games
     )
 
-    # Average usage across the games each player actually played in the window.
-    # Gap is summed then divided by games so a missed game doesn't inflate it.
+    # Current-season games count more than last season's, so a player's recent
+    # 2026 form outweighs stale 2025 games in the same window. (In a single-season
+    # backtest every game is current, so this weighting is a no-op there.)
+    cur_season = pool["season"].max()
+    window = window.with_columns(
+        pl.when(pl.col("season") == cur_season)
+        .then(CURRENT_SEASON_WEIGHT)
+        .otherwise(1.0)
+        .alias("_w")
+    )
+
+    def wmean(col: str) -> pl.Expr:
+        # Weighted mean that ignores nulls in both numerator and denominator.
+        return (pl.col(col) * pl.col("_w")).sum() / pl.col("_w").filter(
+            pl.col(col).is_not_null()
+        ).sum()
+
+    # Weighted-average usage across the games each player played in the window.
     rolling = window.group_by(["gsis_id", "player_display_name", "position", "position_group"]).agg(
         pl.len().alias("games"),
-        pl.col("offense_pct").mean().alias("snap_pct"),
-        pl.col("targets").mean().alias("targets_pg"),
-        pl.col("carries").mean().alias("carries_pg"),
-        pl.col("target_share").mean().alias("target_share"),
-        pl.col("wopr").mean().alias("wopr"),
-        pl.col("fantasy_points_ppr").mean().alias("ppr_pg"),
-        pl.col("points_gap").mean().alias("gap_pg"),
+        wmean("offense_pct").alias("snap_pct"),
+        wmean("targets").alias("targets_pg"),
+        wmean("carries").alias("carries_pg"),
+        wmean("target_share").alias("target_share"),
+        wmean("wopr").alias("wopr"),
+        wmean("fantasy_points_ppr").alias("ppr_pg"),
+        wmean("points_gap").alias("gap_pg"),
     )
 
     rolling = rolling.filter(pl.col("games") >= min_games)
@@ -118,14 +138,21 @@ def opportunity_score(
         _pct_rank("snap_pct").alias("c_snap"),
         _pct_rank("volume_pg").alias("c_volume"),
         _pct_rank("wopr").alias("c_share"),
+        _pct_rank("ppr_pg").alias("c_prod"),
         _pct_rank("gap_pg").alias("c_gap"),  # high rank = most underperformed = buy-low
     )
+    # The usage-based "role" score assumes a player catches/carries the ball, so
+    # it's meaningless for QBs (no targets, no WOPR). Rank QBs by production
+    # instead — the QB-only backtest confirmed production predicts them better.
     rolling = rolling.with_columns(
-        (
+        pl.when(pl.col("position") == "QB")
+        .then(pl.col("c_prod"))
+        .otherwise(
             W_SNAP * pl.col("c_snap")
             + W_VOLUME * pl.col("c_volume")
             + W_SHARE * pl.col("c_share")
-        ).alias("opportunity_score")
+        )
+        .alias("opportunity_score")
     )
 
     # Value score blends role (opportunity) with the buy-low signal (gap).

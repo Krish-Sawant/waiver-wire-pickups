@@ -2,6 +2,8 @@
 // nflverse. The backend resolves player names and reads the username from .env,
 // so the browser never talks to Sleeper directly.
 
+import { clearToken, getToken, setToken } from "./auth";
+
 const BASE = "http://localhost:8000/api";
 
 export interface League {
@@ -37,6 +39,7 @@ export interface WaiverPlayer {
   position: string | null;
   ppr_pg: number | null;
   games: number | null;
+  injury_status: string | null;
 }
 
 export interface WaiverBoard {
@@ -83,9 +86,22 @@ export interface PlayerDetail {
   season: number;
   metrics: PlayerMetrics;
   game_log: GameLogRow[];
+  injury_status: string | null;
+  depth: string | null;
+}
+
+function authHeaders(): Record<string, string> {
+  const token = getToken();
+  return token ? { Authorization: `Bearer ${token}` } : {};
 }
 
 async function handle<T>(res: Response): Promise<T> {
+  if (res.status === 401) {
+    // Session missing/expired — drop the token and bounce to the login gate.
+    clearToken();
+    window.location.reload();
+    throw new Error("Session expired");
+  }
   if (!res.ok) {
     let detail = `Request failed (${res.status})`;
     try {
@@ -99,15 +115,57 @@ async function handle<T>(res: Response): Promise<T> {
 }
 
 function getJSON<T>(path: string): Promise<T> {
-  return fetch(`${BASE}${path}`).then((r) => handle<T>(r));
+  return fetch(`${BASE}${path}`, { headers: authHeaders() }).then((r) => handle<T>(r));
 }
 
 function postJSON<T>(path: string, body: unknown): Promise<T> {
   return fetch(`${BASE}${path}`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", ...authHeaders() },
     body: JSON.stringify(body),
   }).then((r) => handle<T>(r));
+}
+
+// Login/signup use their own fetch so a 4xx (wrong password, email taken)
+// surfaces to the form instead of triggering the reload-to-login in handle().
+async function authRequest(path: string, email: string, password: string): Promise<void> {
+  const res = await fetch(`${BASE}${path}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ email, password }),
+  });
+  if (!res.ok) {
+    let detail = "Request failed";
+    try {
+      detail = ((await res.json()) as { detail?: string }).detail ?? detail;
+    } catch {
+      /* ignore */
+    }
+    throw new Error(detail);
+  }
+  const { token } = (await res.json()) as { token: string };
+  setToken(token);
+}
+
+export function login(email: string, password: string): Promise<void> {
+  return authRequest("/login", email, password);
+}
+
+export function signup(email: string, password: string): Promise<void> {
+  return authRequest("/signup", email, password);
+}
+
+export interface Me {
+  email: string;
+  sleeper_username: string | null;
+}
+
+export function getMe(): Promise<Me> {
+  return getJSON<Me>("/me");
+}
+
+export function linkSleeper(sleeperUsername: string): Promise<Me> {
+  return postJSON<Me>("/me/sleeper", { sleeper_username: sleeperUsername });
 }
 
 export function getLeagues(): Promise<League[]> {
@@ -118,8 +176,8 @@ export function getRoster(leagueId: string): Promise<Roster> {
   return getJSON<Roster>(`/leagues/${leagueId}/roster`);
 }
 
-export function getWaiver(leagueId: string): Promise<WaiverBoard> {
-  return getJSON<WaiverBoard>(`/leagues/${leagueId}/waiver`);
+export function getWaiver(leagueId: string, top = 200): Promise<WaiverBoard> {
+  return getJSON<WaiverBoard>(`/leagues/${leagueId}/waiver?top=${top}`);
 }
 
 export function getPlayer(gsisId: string): Promise<PlayerDetail> {
@@ -144,4 +202,12 @@ export function postChat(
   messages: ChatTurn[]
 ): Promise<{ text: string }> {
   return postJSON<{ text: string }>(`/leagues/${leagueId}/chat`, { messages });
+}
+
+export function getCompare(
+  leagueId: string,
+  gsisA: string,
+  gsisB: string
+): Promise<{ text: string }> {
+  return getJSON<{ text: string }>(`/leagues/${leagueId}/compare/${gsisA}/${gsisB}`);
 }
