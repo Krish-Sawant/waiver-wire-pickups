@@ -7,6 +7,8 @@ import {
   type Roster,
   type WaiverBoard,
 } from "../api";
+import { useShortlist } from "../useShortlist";
+import ComparePlayers from "./ComparePlayers";
 import PlayerCard from "./PlayerCard";
 import WaiverChat from "./WaiverChat";
 
@@ -40,20 +42,87 @@ function RosterTable({
 function WaiverBoardView({
   board,
   leagueId,
+  rosterPlayers,
 }: {
   board: WaiverBoard;
   leagueId: string;
+  rosterPlayers: Player[];
 }) {
   const [selected, setSelected] = useState<string | null>(null);
+  const [comparing, setComparing] = useState(false);
+  const [search, setSearch] = useState("");
+  const [posFilter, setPosFilter] = useState("");
+  const [mode, setMode] = useState<"board" | "shortlist">("board");
+  const { items: shortlist, has, toggle } = useShortlist(leagueId);
+
+  const query = search.trim().toLowerCase();
+  const filtered = board.players.filter(
+    (p) =>
+      (posFilter === "" || p.position === posFilter) &&
+      (query === "" || p.name.toLowerCase().includes(query))
+  );
+
+  const POSITIONS = ["QB", "RB", "WR", "TE"];
+  const rows = mode === "shortlist" ? shortlist : filtered;
+  const injuryOf = (id: string) =>
+    board.players.find((p) => p.gsis_id === id)?.injury_status ?? null;
 
   return (
     <>
       <div className="waiver-layout">
         <div className="waiver-main">
-          <p className="record">
-            Best available · {board.season} season, through week {board.week} · click
-            a player for full details
-          </p>
+          <div className="waiver-toolbar">
+            <p className="record">
+              {mode === "board"
+                ? `Best available · ${board.season} season, through week ${board.week} · click a player for full details`
+                : `Your shortlist · ${shortlist.length} player${
+                    shortlist.length === 1 ? "" : "s"
+                  }`}
+            </p>
+            <div className="toolbar-actions">
+              <button
+                className="waiver-btn"
+                onClick={() => setMode(mode === "board" ? "shortlist" : "board")}
+              >
+                {mode === "board"
+                  ? `★ Shortlist (${shortlist.length})`
+                  : "← Back to Board"}
+              </button>
+              <button className="waiver-btn" onClick={() => setComparing(true)}>
+                Compare Players
+              </button>
+            </div>
+          </div>
+
+          {mode === "board" && (
+            <div className="filter-bar">
+              <input
+                className="player-search"
+                type="text"
+                placeholder="Search players…"
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+              />
+              <div className="pos-filter">
+                <button
+                  className={`pos-tab ${posFilter === "" ? "active" : ""}`}
+                  onClick={() => setPosFilter("")}
+                >
+                  All
+                </button>
+                {POSITIONS.map((pos) => (
+                  <button
+                    key={pos}
+                    className={`pos-tab ${posFilter === pos ? "active" : ""}`}
+                    onClick={() => setPosFilter(pos)}
+                  >
+                    {pos}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
           <table className="roster waiver-table">
             <thead>
               <tr>
@@ -61,21 +130,70 @@ function WaiverBoardView({
                 <th className="pos">Pos</th>
                 <th>Player</th>
                 <th className="num">Fantasy Pts/gm</th>
+                <th className="star-col"></th>
               </tr>
             </thead>
             <tbody>
-              {board.players.map((p, i) => (
-                <tr
-                  key={p.gsis_id}
-                  className="waiver-row"
-                  onClick={() => setSelected(p.gsis_id)}
-                >
-                  <td className="rank">{i + 1}</td>
-                  <td className="pos">{p.position ?? "—"}</td>
-                  <td>{p.name}</td>
-                  <td className="num">{p.ppr_pg ?? "—"}</td>
+              {rows.length === 0 && (
+                <tr>
+                  <td colSpan={5} className="empty">
+                    {mode === "shortlist"
+                      ? "No shortlisted players yet — tap ☆ on the board to add one."
+                      : "No players match."}
+                  </td>
                 </tr>
-              ))}
+              )}
+              {rows.map((p, i) => {
+                const inj = injuryOf(p.gsis_id);
+                return (
+                  <tr
+                    key={p.gsis_id}
+                    className="waiver-row"
+                    onClick={() => setSelected(p.gsis_id)}
+                  >
+                    <td className="rank">{i + 1}</td>
+                    <td className="pos">{p.position ?? "—"}</td>
+                    <td>
+                      {p.name}
+                      {inj && (
+                        <span
+                          className={`inj-badge ${
+                            inj === "Out" || inj === "Inactive" ? "inj-out" : "inj-q"
+                          }`}
+                        >
+                          {inj === "Out"
+                            ? "OUT"
+                            : inj === "Doubtful"
+                              ? "D"
+                              : inj === "Inactive"
+                                ? "INA"
+                                : "Q"}
+                        </span>
+                      )}
+                    </td>
+                    <td className="num">{p.ppr_pg ?? "—"}</td>
+                    <td
+                      className="star-cell"
+                      title={
+                        has(p.gsis_id)
+                          ? "Remove from shortlist"
+                          : "Add to shortlist"
+                      }
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        toggle({
+                          gsis_id: p.gsis_id,
+                          name: p.name,
+                          position: p.position,
+                          ppr_pg: p.ppr_pg,
+                        });
+                      }}
+                    >
+                      {has(p.gsis_id) ? "★" : "☆"}
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         </div>
@@ -88,6 +206,15 @@ function WaiverBoardView({
           gsisId={selected}
           leagueId={leagueId}
           onClose={() => setSelected(null)}
+        />
+      )}
+
+      {comparing && (
+        <ComparePlayers
+          leagueId={leagueId}
+          rosterPlayers={rosterPlayers}
+          waiverPlayers={board.players}
+          onClose={() => setComparing(false)}
         />
       )}
     </>
@@ -159,7 +286,11 @@ export default function RosterDashboard({ league, onBack }: Props) {
           )}
           {waiverError && <p className="error">{waiverError}</p>}
           {board && (
-            <WaiverBoardView board={board} leagueId={league.league_id} />
+            <WaiverBoardView
+              board={board}
+              leagueId={league.league_id}
+              rosterPlayers={roster ? [...roster.starters, ...roster.bench] : []}
+            />
           )}
         </>
       ) : (

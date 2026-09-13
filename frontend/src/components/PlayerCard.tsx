@@ -112,6 +112,7 @@ export default function PlayerCard({ gsisId, leagueId, onClose }: Props) {
   }
 
   const cols = detail ? columnsFor(detail.position) : [];
+  const isQB = detail?.position === "QB";
 
   // Seasons present in the log, newest first; default the tab to the newest.
   const seasons = detail
@@ -151,6 +152,19 @@ export default function PlayerCard({ gsisId, leagueId, onClose }: Props) {
                 <h2>{detail.name}</h2>
                 <p className="player-sub">
                   {detail.position ?? "—"} · {detail.team ?? "FA"}
+                  {detail.depth && ` · depth ${detail.depth}`}
+                  {detail.injury_status && (
+                    <span
+                      className={`inj-badge ${
+                        detail.injury_status === "Out" ||
+                        detail.injury_status === "Inactive"
+                          ? "inj-out"
+                          : "inj-q"
+                      }`}
+                    >
+                      {detail.injury_status}
+                    </span>
+                  )}
                 </p>
               </div>
             </div>
@@ -162,15 +176,30 @@ export default function PlayerCard({ gsisId, leagueId, onClose }: Props) {
               </span>
             </h3>
             <div className="metric-grid">
-              <Metric
-                label="Recent Role"
-                value={detail.metrics.opportunity_score?.toFixed(2) ?? "—"}
-                highlight
-              />
+              {isQB ? (
+                // "Recent Role" and target share are receiving signals — not
+                // meaningful for a QB. Lead with production instead.
+                <Metric
+                  label="PPR/gm"
+                  value={detail.metrics.ppr_pg ?? "—"}
+                  highlight
+                />
+              ) : (
+                <>
+                  <Metric
+                    label="Recent Role"
+                    value={detail.metrics.opportunity_score?.toFixed(2) ?? "—"}
+                    highlight
+                  />
+                  <Metric
+                    label="Target Share"
+                    value={pct(detail.metrics.target_share)}
+                  />
+                  <Metric label="PPR/gm" value={detail.metrics.ppr_pg ?? "—"} />
+                </>
+              )}
               <Metric label="Snap %" value={pct(detail.metrics.snap_pct)} />
-              <Metric label="Target Share" value={pct(detail.metrics.target_share)} />
               <Metric label="Volume/gm" value={detail.metrics.volume_pg ?? "—"} />
-              <Metric label="PPR/gm" value={detail.metrics.ppr_pg ?? "—"} />
               <Metric label="Pts vs Exp" value={detail.metrics.gap_pg ?? "—"} />
             </div>
 
