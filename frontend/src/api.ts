@@ -4,7 +4,7 @@
 
 import { clearToken, getToken, setToken } from "./auth";
 
-const BASE = "http://localhost:8000/api";
+const BASE = import.meta.env.VITE_API_BASE ?? "/api";
 
 export interface League {
   league_id: string;
