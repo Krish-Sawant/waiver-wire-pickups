@@ -49,12 +49,22 @@ load_dotenv()
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
 
+# Cross-origin browsers only: the local Vite dev server, plus anything set in
+# ALLOWED_ORIGINS (comma-separated) for a deployed frontend. In the recommended
+# AWS setup the frontend is served from the same origin as /api (CloudFront
+# proxies /api/* to this box), so CORS isn't even exercised in production — but
+# keep this configurable for direct-access testing.
+_DEFAULT_ORIGINS = ["http://localhost:5173", "http://127.0.0.1:5173"]
+_extra_origins = [
+    o.strip() for o in os.getenv("ALLOWED_ORIGINS", "").split(",") if o.strip()
+]
+ALLOWED_ORIGINS = _DEFAULT_ORIGINS + _extra_origins
+
 app = FastAPI(title="Waiver Wire API")
 
-# The Vite dev server runs on a different port, so allow cross-origin calls.
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
+    allow_origins=ALLOWED_ORIGINS,
     allow_methods=["GET", "POST"],
     allow_headers=["*"],
 )
