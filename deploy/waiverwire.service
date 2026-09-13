@@ -1,0 +1,26 @@
+# systemd unit for the FastAPI backend.
+# Install on the EC2 box with:
+#   sudo cp deploy/waiverwire.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now waiverwire
+# Logs:  journalctl -u waiverwire -f
+
+[Unit]
+Description=Waiver Wire FastAPI backend
+After=network.target
+
+[Service]
+Type=simple
+# Adjust User/paths if you cloned somewhere other than /opt/waiverwire.
+User=ec2-user
+WorkingDirectory=/opt/waiverwire
+EnvironmentFile=/opt/waiverwire/.env
+# One worker: nflreadpy caches a season of data in-process RAM, so extra
+# workers just duplicate the cache and re-download. Bind to localhost only —
+# nginx is the public-facing port.
+ExecStart=/opt/waiverwire/venv/bin/uvicorn waiverwire.api:app --host 127.0.0.1 --port 8000 --workers 1
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
